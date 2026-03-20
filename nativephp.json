@@ -1,6 +1,5 @@
 {
     "namespace": "Camera",
-
     "bridge_functions": [
         {
             "name": "Camera.GetPhoto",
@@ -21,9 +20,8 @@
             "description": "Pick media from the device gallery"
         }
     ],
-
     "android": {
-        "min_version": 33,
+        "min_version": 26,
         "permissions": [
             "android.permission.CAMERA",
             "android.permission.RECORD_AUDIO",
@@ -41,7 +39,6 @@
             }
         ]
     },
-
     "ios": {
         "min_version": "18.2",
         "info_plist": {
@@ -54,7 +51,6 @@
             "pods": []
         }
     },
-
     "events": [
         "Native\\Mobile\\Events\\Camera\\PhotoTaken",
         "Native\\Mobile\\Events\\Camera\\PhotoCancelled",
