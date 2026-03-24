@@ -6,7 +6,19 @@
             "name": "Camera.GetPhoto",
             "android": "com.nativephp.camera.CameraFunctions.GetPhoto",
             "ios": "CameraFunctions.GetPhoto",
-            "description": "Capture a photo with the device camera"
+            "description": "Capture a photo with the device camera",
+            "parameters": {
+                "id": "optional string — ID to track this capture",
+                "event": "optional string — custom event class to fire",
+                "watermark": {
+                    "description": "optional object — overlay a text watermark on the captured photo",
+                    "text": "string — watermark text",
+                    "position": "optional string — bottom-right (default), bottom-left, top-right, top-left, center",
+                    "color": "optional string — hex color, e.g. #FFFFFF (default)",
+                    "size": "optional number — font size in px/pt (default: 48)",
+                    "opacity": "optional number — 0.0 to 1.0 (default: 0.7)"
+                }
+            }
         },
         {
             "name": "Camera.RecordVideo",

@@ -4,6 +4,11 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
@@ -54,6 +59,7 @@ class CameraCoordinator : Fragment() {
     private var pendingPhotoId: String? = null
     private var pendingPhotoEvent: String? = null
     private var pendingCameraOperation: String? = null
+    private var pendingWatermarkOptions: Map<String, Any>? = null
 
     // Video state
     private var pendingVideoUri: Uri? = null
@@ -176,6 +182,11 @@ class CameraCoordinator : Fragment() {
                         Log.w(TAG, "⚠️ Could not delete MediaStore entry: ${e.message}")
                     }
 
+                    // Apply watermark if requested
+                    pendingWatermarkOptions?.let { options ->
+                        applyWatermarkToFile(dst, options)
+                    }
+
                     val payload = JSONObject().apply {
                         put("path", dst.absolutePath)
                         put("mimeType", "image/jpeg")
@@ -207,6 +218,7 @@ class CameraCoordinator : Fragment() {
             pendingCameraUri = null
             pendingPhotoId = null
             pendingPhotoEvent = null
+            pendingWatermarkOptions = null
         }
 
         // Video recorder launcher
@@ -493,13 +505,14 @@ class CameraCoordinator : Fragment() {
         Log.d(TAG, "🧹 Fragment destroyed and resources cleaned up")
     }
 
-    fun launchCamera(id: String? = null, event: String? = null) {
+    fun launchCamera(id: String? = null, event: String? = null, watermark: Map<String, Any>? = null) {
         val context = requireContext()
 
-        Log.d(TAG, "📸 launchCamera called - id=$id, event=$event")
+        Log.d(TAG, "📸 launchCamera called - id=$id, event=$event, watermark=${watermark != null}")
 
         pendingPhotoId = id
         pendingPhotoEvent = event
+        pendingWatermarkOptions = watermark
 
         val cameraPermissionGranted = ContextCompat.checkSelfPermission(
             context,
@@ -733,6 +746,60 @@ class CameraCoordinator : Fragment() {
         }
 
         return metadata
+    }
+
+    private fun applyWatermarkToFile(file: File, options: Map<String, Any>) {
+        val text = options["text"] as? String ?: return
+        val position = (options["position"] as? String ?: "bottom-right").lowercase()
+        val colorHex = options["color"] as? String ?: "#FFFFFF"
+        val fontSize = (options["size"] as? Number)?.toFloat() ?: 48f
+        val opacity = (options["opacity"] as? Number)?.toFloat() ?: 0.7f
+
+        try {
+            val original = BitmapFactory.decodeFile(file.absolutePath) ?: return
+            val mutable = original.copy(Bitmap.Config.ARGB_8888, true)
+            original.recycle()
+
+            val canvas = Canvas(mutable)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = parseWatermarkColor(colorHex)
+                alpha = (opacity * 255).toInt().coerceIn(0, 255)
+                textSize = fontSize
+                setShadowLayer(3f, 1f, 1f, Color.BLACK)
+            }
+
+            val textWidth = paint.measureText(text)
+            val padding = 32f
+
+            val x: Float
+            val y: Float
+            when (position) {
+                "top-left"     -> { x = padding;                             y = padding - paint.ascent() }
+                "top-right"    -> { x = mutable.width - textWidth - padding; y = padding - paint.ascent() }
+                "bottom-left"  -> { x = padding;                             y = mutable.height - padding }
+                "center"       -> { x = (mutable.width - textWidth) / 2f;   y = (mutable.height + (paint.descent() - paint.ascent())) / 2f }
+                else           -> { x = mutable.width - textWidth - padding; y = mutable.height - padding } // bottom-right
+            }
+
+            canvas.drawText(text, x, y, paint)
+
+            file.outputStream().use { out ->
+                mutable.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            }
+            mutable.recycle()
+
+            Log.d(TAG, "🖼️ Watermark applied successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error applying watermark: ${e.message}", e)
+        }
+    }
+
+    private fun parseWatermarkColor(hex: String): Int {
+        return try {
+            Color.parseColor(if (hex.startsWith("#")) hex else "#$hex")
+        } catch (e: Exception) {
+            Color.WHITE
+        }
     }
 
     private fun dispatchEvent(event: String, payloadJson: String) {
