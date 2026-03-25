@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
@@ -175,11 +176,18 @@ class CameraCoordinator : Fragment() {
                             input.copyTo(output)
                         }
                     }
-                    // Clean up MediaStore entry
-                    try {
-                        context.contentResolver.delete(pendingCameraUri!!, null, null)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "⚠️ Could not delete MediaStore entry: ${e.message}")
+                    // Mark the MediaStore entry as complete (IS_PENDING = 0) so the photo is
+                    // visible in the device Gallery and file browser. We intentionally do NOT
+                    // delete the entry — that would hide the photo from every other app.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        try {
+                            val updateValues = ContentValues().apply {
+                                put(MediaStore.Images.Media.IS_PENDING, 0)
+                            }
+                            context.contentResolver.update(pendingCameraUri!!, updateValues, null, null)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Could not update MediaStore IS_PENDING: ${e.message}")
+                        }
                     }
 
                     // Apply watermark if requested
@@ -325,7 +333,22 @@ class CameraCoordinator : Fragment() {
                         val galleryDir = File(context.cacheDir, "Gallery")
                         galleryDir.mkdirs()
 
-                        val dst = File(galleryDir, "gallery_selected_$timestamp")
+                        // Resolve extension before creating the destination file so the path
+                        // returned to the app includes the correct extension (e.g. .jpg, .mp4).
+                        val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                        val ext = when {
+                            mimeType.startsWith("image/jpeg") -> "jpg"
+                            mimeType.startsWith("image/png") -> "png"
+                            mimeType.startsWith("image/gif") -> "gif"
+                            mimeType.startsWith("image/webp") -> "webp"
+                            mimeType.startsWith("video/mp4") -> "mp4"
+                            mimeType.startsWith("video/avi") -> "avi"
+                            mimeType.startsWith("video/quicktime") -> "mov"
+                            mimeType.startsWith("video/3gpp") -> "3gp"
+                            mimeType.startsWith("video/webm") -> "webm"
+                            else -> mimeType.split("/").getOrNull(1) ?: "bin"
+                        }
+                        val dst = File(galleryDir, "gallery_selected_${timestamp}.$ext")
 
                         Log.d(TAG, "🧵 Background copying file to cache")
 
@@ -429,7 +452,22 @@ class CameraCoordinator : Fragment() {
                                 Log.d(TAG, "📂 Processing file ${index + 1}/${uris.size}")
                             }
 
-                            val dst = File(galleryDir, "gallery_selected_${timestamp}_$index")
+                            // Resolve extension before creating the destination file so the path
+                            // returned to the app includes the correct extension (e.g. .jpg, .mp4).
+                            val mimeType = context.contentResolver.getType(uri) ?: "application/octet-stream"
+                            val ext = when {
+                                mimeType.startsWith("image/jpeg") -> "jpg"
+                                mimeType.startsWith("image/png") -> "png"
+                                mimeType.startsWith("image/gif") -> "gif"
+                                mimeType.startsWith("image/webp") -> "webp"
+                                mimeType.startsWith("video/mp4") -> "mp4"
+                                mimeType.startsWith("video/avi") -> "avi"
+                                mimeType.startsWith("video/quicktime") -> "mov"
+                                mimeType.startsWith("video/3gpp") -> "3gp"
+                                mimeType.startsWith("video/webm") -> "webm"
+                                else -> mimeType.split("/").getOrNull(1) ?: "bin"
+                            }
+                            val dst = File(galleryDir, "gallery_selected_${timestamp}_${index}.$ext")
 
                             // Use buffered streams with 64KB buffer for better performance
                             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -533,12 +571,18 @@ class CameraCoordinator : Fragment() {
         val context = requireContext()
         val resolver = context.contentResolver
 
+        val photoContentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.TITLE, "NativePHP_${System.currentTimeMillis()}")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+
         val photoUri = resolver.insert(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            ContentValues().apply {
-                put(MediaStore.Images.Media.TITLE, "NativePHP_${System.currentTimeMillis()}")
-                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            }
+            photoContentValues
         ) ?: run {
             Log.e(TAG, "❌ Failed to create camera URI")
             Toast.makeText(context, "Failed to prepare camera", Toast.LENGTH_SHORT).show()
@@ -593,12 +637,18 @@ class CameraCoordinator : Fragment() {
 
         Log.d(TAG, "🎥 proceedWithVideoRecording - creating MediaStore URI")
 
+        val videoContentValues = ContentValues().apply {
+            put(MediaStore.Video.Media.TITLE, "NativePHP_${System.currentTimeMillis()}")
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/Camera")
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            }
+        }
+
         val videoUri = resolver.insert(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            ContentValues().apply {
-                put(MediaStore.Video.Media.TITLE, "NativePHP_${System.currentTimeMillis()}")
-                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            }
+            videoContentValues
         ) ?: run {
             Log.e(TAG, "❌ Failed to create video URI")
             Toast.makeText(context, "Failed to prepare video recorder", Toast.LENGTH_SHORT).show()
@@ -678,11 +728,16 @@ class CameraCoordinator : Fragment() {
                 }
             }
 
-            // Clean up MediaStore entry after copying
-            try {
-                context.contentResolver.delete(uri, null, null)
-            } catch (e: Exception) {
-                Log.w(TAG, "⚠️ Could not delete MediaStore entry: ${e.message}")
+            // Mark the MediaStore entry as complete so the video is visible in Gallery/file browsers.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    val updateValues = ContentValues().apply {
+                        put(MediaStore.Video.Media.IS_PENDING, 0)
+                    }
+                    context.contentResolver.update(uri, updateValues, null, null)
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠️ Could not update MediaStore IS_PENDING: ${e.message}")
+                }
             }
 
             return cacheFile.absolutePath

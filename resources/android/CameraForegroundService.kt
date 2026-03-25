@@ -13,9 +13,9 @@ import androidx.core.app.NotificationCompat
  * Foreground service to prevent the app from being killed by Android's Low Memory Killer
  * while waiting for the native camera app to return a photo or video result.
  *
- * Uses shortService type (3-minute timeout) instead of camera type since we're not
- * accessing the camera from the background - just keeping the app alive while the
- * native camera app is open.
+ * Uses the camera foreground service type, which matches the manifest declaration and the
+ * FOREGROUND_SERVICE_CAMERA permission. The service is stopped as soon as the camera
+ * result is received.
  */
 class CameraForegroundService : Service() {
 
@@ -33,20 +33,15 @@ class CameraForegroundService : Service() {
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Android 14+ requires foreground service type
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE)
+            // Android 14+ requires the foreground service type to match the manifest declaration.
+            // The manifest declares foregroundServiceType="camera", so we must use
+            // FOREGROUND_SERVICE_TYPE_CAMERA here. Using any other type causes a crash.
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
 
         return START_NOT_STICKY
-    }
-
-    override fun onTimeout(startId: Int) {
-        // Called after ~3 minutes if service is still running (Android 14+)
-        // Clean up and stop the service gracefully
-        Log.w(TAG, "ShortService timeout reached after 3 minutes - stopping service")
-        stopSelf()
     }
 
     override fun onDestroy() {
