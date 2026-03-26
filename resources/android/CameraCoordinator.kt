@@ -176,20 +176,6 @@ class CameraCoordinator : Fragment() {
                             input.copyTo(output)
                         }
                     }
-                    // Mark the MediaStore entry as complete (IS_PENDING = 0) so the photo is
-                    // visible in the device Gallery and file browser. We intentionally do NOT
-                    // delete the entry — that would hide the photo from every other app.
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        try {
-                            val updateValues = ContentValues().apply {
-                                put(MediaStore.Images.Media.IS_PENDING, 0)
-                            }
-                            context.contentResolver.update(pendingCameraUri!!, updateValues, null, null)
-                        } catch (e: Exception) {
-                            Log.w(TAG, "⚠️ Could not update MediaStore IS_PENDING: ${e.message}")
-                        }
-                    }
-
                     // Apply watermark if requested
                     pendingWatermarkOptions?.let { options ->
                         applyWatermarkToFile(dst, options)
@@ -574,9 +560,12 @@ class CameraCoordinator : Fragment() {
         val photoContentValues = ContentValues().apply {
             put(MediaStore.Images.Media.TITLE, "NativePHP_${System.currentTimeMillis()}")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            // RELATIVE_PATH places the file in DCIM/Camera (visible in Gallery).
+            // IS_PENDING must NOT be set here: the system camera app is a different process
+            // and cannot write to a pending entry owned by this app — it would return
+            // RESULT_CANCELED, causing PhotoCancelled to fire instead of PhotoTaken.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Camera")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
             }
         }
 
@@ -640,9 +629,10 @@ class CameraCoordinator : Fragment() {
         val videoContentValues = ContentValues().apply {
             put(MediaStore.Video.Media.TITLE, "NativePHP_${System.currentTimeMillis()}")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            // Same reasoning as photo capture: do not set IS_PENDING — the system camera app
+            // (a different process) cannot write to a pending entry owned by this app.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/Camera")
-                put(MediaStore.Video.Media.IS_PENDING, 1)
             }
         }
 
@@ -725,18 +715,6 @@ class CameraCoordinator : Fragment() {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 cacheFile.outputStream().buffered(64 * 1024).use { output ->
                     input.copyTo(output)
-                }
-            }
-
-            // Mark the MediaStore entry as complete so the video is visible in Gallery/file browsers.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    val updateValues = ContentValues().apply {
-                        put(MediaStore.Video.Media.IS_PENDING, 0)
-                    }
-                    context.contentResolver.update(uri, updateValues, null, null)
-                } catch (e: Exception) {
-                    Log.w(TAG, "⚠️ Could not update MediaStore IS_PENDING: ${e.message}")
                 }
             }
 
