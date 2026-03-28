@@ -23,7 +23,7 @@
     ],
 
     "android": {
-        "min_version": 33,
+        "min_version": 26,
         "permissions": [
             "android.permission.CAMERA",
             "android.permission.RECORD_AUDIO",
