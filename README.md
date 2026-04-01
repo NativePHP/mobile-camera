@@ -8,8 +8,14 @@ The Camera API provides access to the device's camera for taking photos, recordi
 
 ## Installation
 
-```bash
+```shell
 composer require nativephp/mobile-camera
+```
+
+Don't forget to register the plugin:
+
+```shell
+php artisan native:plugin:register nativephp/mobile-camera
 ```
 
 ## Usage
