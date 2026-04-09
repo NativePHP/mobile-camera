@@ -179,3 +179,4 @@ Explicitly start the video recording.
 - If permission is denied, camera functions will fail silently
 - Camera permission is required for photos, videos, AND QR/barcode scanning
 - File formats: JPEG for photos, MP4 for videos
+- To display captured images in the app, follow `Public` section in [Asset documentation of NativePHP](https://nativephp.com/docs/mobile/3/the-basics/assets#public-files)
