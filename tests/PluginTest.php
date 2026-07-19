@@ -5,7 +5,6 @@
  *
  * Run with: ./vendor/bin/pest
  */
-
 beforeEach(function () {
     // PLUGIN_PATH lets CI run this suite from an external Pest harness
     // (the plugin's own composer deps aren't resolvable on public

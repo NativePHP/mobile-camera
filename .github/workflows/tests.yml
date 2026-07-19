@@ -1,0 +1,63 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: composer:v2
+
+      # nativephp/mobile v4 is not a stable Packagist release yet, and this
+      # suite needs its FakeBridge testing classes. Resolve the core from the
+      # public mobile-air repo's main branch (dev-main) — the same override
+      # test-plugins.sh applies locally. The default GITHUB_TOKEN is used only
+      # to avoid GitHub API rate limits while reading the public repo.
+      - name: Point Composer at the v4 core (dev-main)
+        run: |
+          composer config repositories.nativephp-mobile vcs https://github.com/nativephp/mobile-air
+          composer config minimum-stability dev
+          composer config prefer-stable true
+          composer config github-oauth.github.com "${{ secrets.GITHUB_TOKEN }}"
+          composer require "nativephp/mobile:dev-main" --no-update --no-interaction
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run Pest
+        run: vendor/bin/pest
+
+  pint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # Pint is a standalone formatter — it needs no project vendor/, so this
+      # job skips composer entirely.
+      - name: Setup PHP with Pint
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: pint
+
+      - name: Check code style
+        run: pint --test

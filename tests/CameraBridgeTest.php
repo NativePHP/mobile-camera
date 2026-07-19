@@ -20,8 +20,9 @@ use Native\Mobile\Events\Camera\VideoCancelled;
 use Native\Mobile\Events\Camera\VideoRecorded;
 use Native\Mobile\Events\Gallery\MediaSelected;
 use Native\Mobile\Testing\Native;
+use Tests\TestCase;
 
-uses(Tests\TestCase::class);
+uses(TestCase::class);
 
 beforeEach(function () {
     $this->bridge = Native::fakeBridge();
