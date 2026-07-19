@@ -173,6 +173,43 @@ Explicitly start the video recording.
 - **Android:** App cache directory at `{cache}/video_{timestamp}.mp4`
 - **iOS:** Application Support at `~/Library/Application Support/Videos/captured_video_{timestamp}.mp4`
 
+## Testing
+
+The plugin extends the NativePHP testing suite with camera-specific helpers, so your app tests can assert capture/recording/picker activity without knowing any bridge internals.
+
+`getPhoto()`, `recordVideo()`, and `pickImages()` only open the native camera or gallery UI — the result (`PhotoTaken`, `VideoRecorded`, `MediaSelected`, or a cancellation/permission-denied counterpart) arrives later as an async event that the bridge never answers synchronously. So these helpers assert that a request was made; there's no `with*` helper to preload a captured photo or picked media.
+
+```php
+use Native\Mobile\Testing\Native;
+
+it('opens the camera when taking a profile photo', function () {
+    Native::test(ProfileEditor::class)
+        ->tap('Take photo')
+        ->assertPhotoRequested();
+});
+
+it('opens the gallery picker for a single image', function () {
+    Native::test(ProfileEditor::class)
+        ->tap('Choose from gallery')
+        ->assertMediaPicked(fn (array $p) => $p['mediaType'] === 'image' && $p['multiple'] === false);
+});
+
+it('does not touch the camera on a plain form save', function () {
+    Native::test(ProfileEditor::class)
+        ->tap('Save')
+        ->assertNothingCaptured();
+});
+```
+
+### Helpers
+
+- `assertPhotoRequested()` — assert a photo capture was started (`Camera::getPhoto()->start()`).
+- `assertVideoRequested()` — assert a video recording was started (`Camera::recordVideo()->start()`).
+- `assertMediaPicked(?callable $filter = null)` — assert the gallery picker was opened, optionally matching the decoded call params (e.g. `mediaType`, `multiple`, `maxItems`).
+- `assertNothingCaptured()` — assert no photo, video, or media picker request was made.
+
+The helpers are available on `Native::fakeBridge()` and chain directly off `Native::test(...)`. They register automatically while running tests (requires a core with a macroable FakeBridge; on older cores they simply don't register).
+
 ## Notes
 
 - **Permissions:** You must enable the `camera` permission in `config/nativephp.php` to use camera features
