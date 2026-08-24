@@ -161,7 +161,10 @@ class CameraCoordinator : Fragment() {
             val cancelEventClass = "Native\\Mobile\\Events\\Camera\\PhotoCancelled"
 
             if (success && pendingCameraUri != null) {
-                val dst = File(context.cacheDir, "captured_${System.currentTimeMillis()}.jpg")
+                // Use app's files directory (accessible to PHP) instead of cache
+                val photoDir = File(context.filesDir, "Camera")
+                photoDir.mkdirs()
+                val dst = File(photoDir, "captured_${System.currentTimeMillis()}.jpg")
 
                 try {
                     context.contentResolver.openInputStream(pendingCameraUri!!)?.use { input ->
@@ -309,8 +312,8 @@ class CameraCoordinator : Fragment() {
                         val context = requireContext()
                         val timestamp = System.currentTimeMillis()
 
-                        // Use Gallery subfolder in cache directory
-                        val galleryDir = File(context.cacheDir, "Gallery")
+                        // Use Gallery subfolder in app's files directory (accessible to PHP)
+                        val galleryDir = File(context.filesDir, "Gallery")
                         galleryDir.mkdirs()
 
                         val dst = File(galleryDir, "gallery_selected_$timestamp")
@@ -407,8 +410,8 @@ class CameraCoordinator : Fragment() {
 
                         Log.d(TAG, "🧵 Background processing ${uris.size} files")
 
-                        // Use Gallery subfolder in cache directory
-                        val galleryDir = File(context.cacheDir, "Gallery")
+                        // Use Gallery subfolder in app's files directory (accessible to PHP)
+                        val galleryDir = File(context.filesDir, "Gallery")
                         galleryDir.mkdirs()
 
                         uris.forEachIndexed { index, uri ->
@@ -657,7 +660,10 @@ class CameraCoordinator : Fragment() {
 
         try {
             val timestamp = System.currentTimeMillis()
-            val cacheFile = File(context.cacheDir, "video_$timestamp.mp4")
+            // Use app's files directory (accessible to PHP) instead of cache
+            val videoDir = File(context.filesDir, "Camera")
+            videoDir.mkdirs()
+            val cacheFile = File(videoDir, "video_$timestamp.mp4")
 
             context.contentResolver.openInputStream(uri)?.use { input ->
                 cacheFile.outputStream().buffered(64 * 1024).use { output ->
