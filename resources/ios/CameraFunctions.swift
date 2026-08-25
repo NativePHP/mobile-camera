@@ -661,10 +661,35 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
 
             try fileManager.copyItem(at: url, to: destinationURL)
 
+            var finalURL = destinationURL
+            var finalExtension = fileExtension
+
+            if type == "image" {
+                let lowerExt = fileExtension.lowercased()
+
+                // HEIC/HEIF cannot be shown in WKWebView; normalize to JPEG like camera capture.
+                if lowerExt == "heic" || lowerExt == "heif" {
+                    if let image = UIImage(contentsOfFile: destinationURL.path),
+                       let jpegData = image.jpegData(compressionQuality: 0.9) {
+                        let jpegName = "gallery_selected_\(timestamp)_\(index).jpg"
+                        let jpegURL = galleryDir.appendingPathComponent(jpegName)
+
+                        if fileManager.fileExists(atPath: jpegURL.path) {
+                            try? fileManager.removeItem(at: jpegURL)
+                        }
+
+                        try jpegData.write(to: jpegURL)
+                        try? fileManager.removeItem(at: destinationURL)
+                        finalURL = jpegURL
+                        finalExtension = "jpg"
+                    }
+                }
+            }
+
             let fileInfo: [String: Any] = [
-                "path": destinationURL.path,
-                "mimeType": getMimeType(for: fileExtension),
-                "extension": fileExtension,
+                "path": finalURL.path,
+                "mimeType": getMimeType(for: finalExtension),
+                "extension": finalExtension,
                 "type": type
             ]
 
@@ -685,6 +710,10 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
             return "image/gif"
         case "webp":
             return "image/webp"
+        case "heic":
+            return "image/heic"
+        case "heif":
+            return "image/heif"
         case "mp4":
             return "video/mp4"
         case "mov":
