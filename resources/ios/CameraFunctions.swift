@@ -299,14 +299,20 @@ final class CameraVideoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let fm = FileManager.default
 
-            // Use temporary directory
-            let tempDir = fm.temporaryDirectory
+            // Use Application Support directory instead of the temporary directory.
+            // NSTemporaryDirectory() can be purged by iOS at any time (low disk space,
+            // app relaunch, etc), which risks the same "file went missing before PHP
+            // could read it" failure mode as Android's cache dir (see Issue #8).
+            // Application Support is private, persistent, and not auto-purged.
+            let supportDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let cameraDir = supportDir.appendingPathComponent("Camera", isDirectory: true)
+            try? fm.createDirectory(at: cameraDir, withIntermediateDirectories: true)
 
             // Generate unique filename
             let timestamp = Int(Date().timeIntervalSince1970 * 1000)
             let fileExtension = videoURL.pathExtension.isEmpty ? "mp4" : videoURL.pathExtension
             let filename = "captured_video_\(timestamp).\(fileExtension)"
-            var fileURL = tempDir.appendingPathComponent(filename)
+            var fileURL = cameraDir.appendingPathComponent(filename)
 
             do {
                 // Remove existing file if present
@@ -416,13 +422,19 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let fm = FileManager.default
 
-            // Use temporary directory
-            let tempDir = fm.temporaryDirectory
+            // Use Application Support directory instead of the temporary directory.
+            // NSTemporaryDirectory() can be purged by iOS at any time (low disk space,
+            // app relaunch, etc), which risks the same "file went missing before PHP
+            // could read it" failure mode as Android's cache dir (see Issue #8).
+            // Application Support is private, persistent, and not auto-purged.
+            let supportDir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let cameraDir = supportDir.appendingPathComponent("Camera", isDirectory: true)
+            try? fm.createDirectory(at: cameraDir, withIntermediateDirectories: true)
 
             // Generate unique filename
             let timestamp = Int(Date().timeIntervalSince1970 * 1000)
             let filename = "captured_photo_\(timestamp).jpg"
-            var fileURL = tempDir.appendingPathComponent(filename)
+            var fileURL = cameraDir.appendingPathComponent(filename)
 
             do {
                 // Remove existing file if present
@@ -642,9 +654,13 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
     private func copyFileToCache(url: URL, index: Int, type: String, completion: @escaping ([String: Any]?) -> Void) {
         let fileManager = FileManager.default
 
-        // Use temporary directory with Gallery subfolder
-        let tempDir = fileManager.temporaryDirectory
-        let galleryDir = tempDir.appendingPathComponent("Gallery", isDirectory: true)
+        // Use Application Support directory with a Gallery subfolder instead of the
+        // temporary directory. NSTemporaryDirectory() can be purged by iOS at any
+        // time, which risks the same "file went missing before PHP could read it"
+        // failure mode as Android's cache dir (see Issue #8). Application Support
+        // is private, persistent, and not auto-purged.
+        let supportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let galleryDir = supportDir.appendingPathComponent("Gallery", isDirectory: true)
 
         // Ensure Gallery directory exists
         try? fileManager.createDirectory(at: galleryDir, withIntermediateDirectories: true)
