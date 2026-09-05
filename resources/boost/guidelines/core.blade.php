@@ -111,6 +111,21 @@ public function handleMediaSelected(array $media)
 - `Native\Mobile\Events\Camera\VideoCancelled` - Recording cancelled
 - `Native\Mobile\Events\Gallery\MediaSelected` - Media selected (payload: `array $media`)
 
+### Capture Date and Location
+
+`PhotoTaken` and each file in `MediaSelected` may additionally carry `takenAt` (ISO-8601 UTC string), `latitude` and `longitude` (decimal degrees). Keys are omitted when unavailable. `takenAt` is read from EXIF and needs no permissions. Pass `includeLocation: true` to actively recover GPS coordinates; this prompts for location / photo library access (iOS) or `ACCESS_MEDIA_LOCATION` (Android). Default is `false`, so no new prompts are shown.
+
+@verbatim
+<code-snippet name="Opting into location" lang="php">
+use Native\Mobile\Facades\Camera;
+use Native\Mobile\PendingMediaPicker;
+
+Camera::getPhoto(['includeLocation' => true]);
+
+(new PendingMediaPicker(['includeLocation' => true]))->images()->start();
+</code-snippet>
+@endverbatim
+
 ### Storage Locations
 
 - **Photos (Android):** `{cache}/captured.jpg`

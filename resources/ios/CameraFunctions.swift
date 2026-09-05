@@ -19,6 +19,8 @@ enum CameraFunctions {
     /// Parameters:
     ///   - id: (optional) string - Optional ID to track this specific photo capture
     ///   - event: (optional) string - Custom event class to fire (defaults to "Native\Mobile\Events\Camera\PhotoTaken")
+    ///   - includeLocation: (optional) boolean - Geotag the capture using Core Location. Prompts for
+    ///     When-In-Use location authorization the first time (default: false, no new prompt)
     /// Returns:
     ///   - (empty map - results are returned via events)
     /// Events:
@@ -29,8 +31,9 @@ enum CameraFunctions {
         func execute(parameters: [String: Any]) throws -> [String: Any] {
             let id = parameters["id"] as? String
             let event = parameters["event"] as? String
+            let includeLocation = parameters["includeLocation"] as? Bool ?? false
 
-            print("📸 Capturing photo with id=\(id ?? "nil"), event=\(event ?? "nil")")
+            print("📸 Capturing photo with id=\(id ?? "nil"), event=\(event ?? "nil"), includeLocation=\(includeLocation)")
 
             // Helper to fire permission denied event
             func firePermissionDenied() {
@@ -46,14 +49,14 @@ enum CameraFunctions {
             switch AVCaptureDevice.authorizationStatus(for: .video) {
             case .authorized:
                 // Permission granted, proceed to show camera
-                presentPhotoPicker(id: id, event: event)
+                presentPhotoPicker(id: id, event: event, includeLocation: includeLocation)
 
             case .notDetermined:
                 // Request permission
                 AVCaptureDevice.requestAccess(for: .video) { granted in
                     DispatchQueue.main.async {
                         if granted {
-                            self.presentPhotoPicker(id: id, event: event)
+                            self.presentPhotoPicker(id: id, event: event, includeLocation: includeLocation)
                         } else {
                             print("❌ Camera permission denied by user")
                             firePermissionDenied()
@@ -77,15 +80,19 @@ enum CameraFunctions {
             return [:]
         }
 
-        private func presentPhotoPicker(id: String?, event: String?) {
+        private func presentPhotoPicker(id: String?, event: String?, includeLocation: Bool) {
             DispatchQueue.main.async {
                 // Set id and event on delegate before presenting picker
                 CameraPhotoDelegate.shared.pendingPhotoId = id
                 CameraPhotoDelegate.shared.pendingPhotoEvent = event
+                CameraPhotoDelegate.shared.pendingIncludeLocation = includeLocation
 
-                // Begin gathering a location fix so the capture can be geotagged.
-                // Best-effort: never blocks or fails the capture.
-                CameraLocationProvider.shared.start()
+                // Opt-in only: begin gathering a location fix so the capture can be geotagged.
+                // This is what triggers the location authorization prompt, so it is never
+                // started unless the caller asked for it. Best-effort: never blocks capture.
+                if includeLocation {
+                    CameraLocationProvider.shared.start()
+                }
 
                 guard let windowScene = UIApplication.shared.connectedScenes
                     .compactMap({ $0 as? UIWindowScene })
@@ -122,6 +129,8 @@ enum CameraFunctions {
     ///   - maxItems: (optional) int - Maximum number of items when multiple=true (default: 10)
     ///   - id: (optional) string - Optional ID to track this operation
     ///   - event: (optional) string - Custom event class to fire (defaults to "Native\Mobile\Events\Camera\MediaSelected")
+    ///   - includeLocation: (optional) boolean - Recover GPS coordinates of picked images via the
+    ///     Photo Library. Prompts for Photo Library access (default: false, no new prompt)
     /// Returns:
     ///   - (empty map - results are returned via events)
     /// Events:
@@ -133,8 +142,9 @@ enum CameraFunctions {
             let maxItems = parameters["maxItems"] as? Int ?? 10
             let id = parameters["id"] as? String
             let event = parameters["event"] as? String
+            let includeLocation = parameters["includeLocation"] as? Bool ?? false
 
-            print("🖼️ Picking media with mediaType=\(mediaType), multiple=\(multiple), maxItems=\(maxItems), id=\(id ?? "nil"), event=\(event ?? "nil")")
+            print("🖼️ Picking media with mediaType=\(mediaType), multiple=\(multiple), maxItems=\(maxItems), id=\(id ?? "nil"), event=\(event ?? "nil"), includeLocation=\(includeLocation)")
 
             DispatchQueue.main.async {
                 CameraGalleryManager.shared.openGallery(
@@ -142,7 +152,8 @@ enum CameraFunctions {
                     multiple: multiple,
                     maxItems: maxItems,
                     id: id,
-                    event: event
+                    event: event,
+                    includeLocation: includeLocation
                 )
             }
 
@@ -330,6 +341,30 @@ enum CameraMetadata {
         }
 
         return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    /// Read `takenAt`/`latitude`/`longitude` straight from an image file's embedded metadata
+    /// using ImageIO. Needs no permissions, so it is the default source for picked images when
+    /// the caller has not opted into location recovery. Only present keys are returned.
+    static func payloadMetadata(fromFileAt url: URL) -> [String: Any]? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, options) as? [String: Any] else {
+            return nil
+        }
+
+        var metadata: [String: Any] = [:]
+
+        if let date = dateTimeOriginal(from: properties) {
+            metadata["takenAt"] = isoString(from: date)
+        }
+
+        if let coordinate = coordinate(from: properties) {
+            metadata["latitude"] = coordinate.latitude
+            metadata["longitude"] = coordinate.longitude
+        }
+
+        return metadata.isEmpty ? nil : metadata
     }
 
     /// Build a CoreGraphics GPS dictionary from a CLLocation, suitable for embedding via ImageIO.
@@ -534,6 +569,8 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
 
     var pendingPhotoId: String?
     var pendingPhotoEvent: String?
+    /// Whether the caller opted into geotagging (bridge parameter `includeLocation`).
+    var pendingIncludeLocation: Bool = false
 
     // User captured a photo
     func imagePickerController(_ picker: UIImagePickerController,
@@ -566,9 +603,11 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
         // and write it back into the output JPEG ourselves.
         let mediaMetadata = (info[.mediaMetadata] as? [String: Any]) ?? [:]
 
-        // Grab the best location fix we have at capture time (may be nil).
-        let captureLocation = CameraLocationProvider.shared.currentLocation
+        // Grab the best location fix we have at capture time (may be nil). Only consulted when
+        // the caller opted in; otherwise the provider was never started and no prompt was shown.
+        let captureLocation = pendingIncludeLocation ? CameraLocationProvider.shared.currentLocation : nil
         CameraLocationProvider.shared.stop()
+        pendingIncludeLocation = false
 
         // Save on a background queue
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -739,22 +778,28 @@ final class CameraGalleryManager: NSObject {
     var pendingGalleryId: String?
     var pendingGalleryEvent: String?
 
-    func openGallery(mediaType: String, multiple: Bool, maxItems: Int, id: String? = nil, event: String? = nil) {
+    func openGallery(mediaType: String, multiple: Bool, maxItems: Int, id: String? = nil, event: String? = nil, includeLocation: Bool = false) {
         // Store id and event for callback
         pendingGalleryId = id
         pendingGalleryEvent = event
 
-        // Request full Photo Library access so picker results carry `assetIdentifier`,
-        // which we use to recover each asset's creation date and GPS location. Without
-        // photo library access the picker strips GPS for privacy.
+        guard includeLocation else {
+            // Default: the permission-free picker. It strips GPS for privacy, but the capture
+            // date is still read from the copied file's EXIF, so no prompt is ever shown.
+            presentPicker(mediaType: mediaType, multiple: multiple, maxItems: maxItems, useLibrary: false)
+            return
+        }
+
+        // Opt-in: request Photo Library access so picker results carry `assetIdentifier`,
+        // which we use to recover each asset's creation date and GPS location.
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] _ in
             DispatchQueue.main.async {
-                self?.presentPicker(mediaType: mediaType, multiple: multiple, maxItems: maxItems)
+                self?.presentPicker(mediaType: mediaType, multiple: multiple, maxItems: maxItems, useLibrary: true)
             }
         }
     }
 
-    private func presentPicker(mediaType: String, multiple: Bool, maxItems: Int) {
+    private func presentPicker(mediaType: String, multiple: Bool, maxItems: Int, useLibrary: Bool) {
         guard let windowScene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }),
@@ -764,8 +809,11 @@ final class CameraGalleryManager: NSObject {
             return
         }
 
-        // Back the picker with the shared photo library so results expose `assetIdentifier`.
-        var configuration = PHPickerConfiguration(photoLibrary: .shared())
+        // Only when opted in: back the picker with the shared photo library so results expose
+        // `assetIdentifier`. The plain configuration needs no Photo Library permission.
+        var configuration = useLibrary
+            ? PHPickerConfiguration(photoLibrary: .shared())
+            : PHPickerConfiguration()
 
         // Set media type filter
         switch mediaType.lowercased() {
@@ -841,7 +889,8 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
             group.enter()
 
             // Resolve creation date / location from the backing PHAsset (requires photo
-            // library access + an assetIdentifier). Best-effort: nil when unavailable.
+            // library access + an assetIdentifier, i.e. includeLocation=true). Best-effort:
+            // nil when unavailable, in which case the copied file's own EXIF is used instead.
             let assetMetadata = self.assetMetadata(for: result.assetIdentifier)
 
             // Try to get the file representation
@@ -942,6 +991,11 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
 
             try fileManager.copyItem(at: url, to: destinationURL)
 
+            // Permission-free metadata source (used when no PHAsset metadata is available).
+            let fileMetadata: [String: Any]? = (type == "image" && assetMetadata == nil)
+                ? CameraMetadata.payloadMetadata(fromFileAt: destinationURL)
+                : nil
+
             var finalURL = destinationURL
             var finalExtension = fileExtension
 
@@ -975,9 +1029,16 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
             ]
 
             // Attach capture metadata for images (videos keep their existing shape).
-            // Only present keys are merged in, so unavailable values are omitted.
-            if let assetMetadata = assetMetadata {
-                fileInfo.merge(assetMetadata) { _, new in new }
+            // Prefer the PHAsset (opt-in path); otherwise read the copied file's own EXIF,
+            // which needs no permission. Only present keys are merged in, so unavailable
+            // values are omitted. Read the EXIF from the original copy, before any HEIC->JPEG
+            // re-encode, since UIImage.jpegData drops the metadata.
+            if type == "image" {
+                if let assetMetadata = assetMetadata {
+                    fileInfo.merge(assetMetadata) { _, new in new }
+                } else if let fileMetadata = fileMetadata {
+                    fileInfo.merge(fileMetadata) { _, new in new }
+                }
             }
 
             completion(fileInfo)

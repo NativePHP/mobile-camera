@@ -78,6 +78,9 @@ class CameraCoordinator : Fragment() {
     private var pendingGalleryMediaType: String? = null
     private var pendingGalleryMultiple: Boolean = false
     private var pendingGalleryMaxItems: Int = 10
+    // Opt-in: recover un-redacted GPS for picked media (requires ACCESS_MEDIA_LOCATION).
+    // Defaults to false so existing users never see a new permission prompt.
+    private var pendingGalleryIncludeLocation: Boolean = false
 
     // Background processing
     private var fileProcessingExecutor: ExecutorService? = null
@@ -651,20 +654,29 @@ class CameraCoordinator : Fragment() {
         videoRecorderLauncher.launch(intent)
     }
 
-    fun launchGallery(mediaType: String, multiple: Boolean, maxItems: Int, id: String? = null, event: String? = null) {
-        Log.d(TAG, "🖼️ launchGallery: mediaType=$mediaType, multiple=$multiple, maxItems=$maxItems, id=$id, event=$event")
+    fun launchGallery(
+        mediaType: String,
+        multiple: Boolean,
+        maxItems: Int,
+        id: String? = null,
+        event: String? = null,
+        includeLocation: Boolean = false
+    ) {
+        Log.d(TAG, "🖼️ launchGallery: mediaType=$mediaType, multiple=$multiple, maxItems=$maxItems, id=$id, event=$event, includeLocation=$includeLocation")
 
         pendingGalleryId = id
         pendingGalleryEvent = event
         pendingGalleryMediaType = mediaType
         pendingGalleryMultiple = multiple
         pendingGalleryMaxItems = maxItems
+        pendingGalleryIncludeLocation = includeLocation
 
         // The Photo Picker redacts GPS metadata unless we read the original bytes via
         // MediaStore, which requires ACCESS_MEDIA_LOCATION (a runtime permission on API 29+).
-        // Request it up-front, mirroring the CAMERA permission flow. Whatever the result,
-        // we still launch the picker; location recovery just degrades gracefully.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Only when the caller opted in (includeLocation=true) do we request it up-front,
+        // mirroring the CAMERA permission flow. Whatever the result, we still launch the
+        // picker; location recovery just degrades gracefully.
+        if (includeLocation && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val context = requireContext()
             val mediaLocationGranted = ContextCompat.checkSelfPermission(
                 context,
@@ -786,10 +798,17 @@ class CameraCoordinator : Fragment() {
                 put("type", type)
             }
 
-            // For images, attach capture date + GPS. The Photo Picker redacts GPS, so we
-            // also attempt to recover the original (un-redacted) bytes via MediaStore.
+            // For images, attach capture date + GPS from the file's EXIF. The Photo Picker
+            // redacts GPS, so when the caller opted in we also attempt to recover the original
+            // (un-redacted) bytes via MediaStore.
             if (type == "image") {
-                attachImageMetadata(metadata, cachePath, fallbackToNow = false, sourceUri = uri)
+                attachImageMetadata(
+                    metadata,
+                    cachePath,
+                    fallbackToNow = false,
+                    sourceUri = uri,
+                    recoverOriginal = pendingGalleryIncludeLocation
+                )
             }
 
         } catch (e: Exception) {
@@ -816,8 +835,9 @@ class CameraCoordinator : Fragment() {
      * to TAG_DATETIME), then MediaStore DATE_TAKEN, then optionally the current time.
      *
      * GPS is read from the copied file's EXIF first. The Photo Picker redacts location, so when a
-     * [sourceUri] is supplied we additionally try to recover the original (un-redacted) bytes via
-     * MediaStore.setRequireOriginal (requires ACCESS_MEDIA_LOCATION on API 29+).
+     * [sourceUri] is supplied and [recoverOriginal] is true we additionally try to recover the
+     * original (un-redacted) bytes via MediaStore.setRequireOriginal (requires
+     * ACCESS_MEDIA_LOCATION on API 29+). This is opt-in (bridge parameter `includeLocation`).
      *
      * All access is best-effort: any failure simply omits the affected key and never throws.
      */
@@ -825,7 +845,8 @@ class CameraCoordinator : Fragment() {
         payload: JSONObject,
         cachePath: String,
         fallbackToNow: Boolean,
-        sourceUri: Uri? = null
+        sourceUri: Uri? = null,
+        recoverOriginal: Boolean = false
     ) {
         val context = context ?: return
 
@@ -850,8 +871,8 @@ class CameraCoordinator : Fragment() {
             Log.w(TAG, "⚠️ Could not read EXIF from cache file: ${e.message}")
         }
 
-        // 2. The Photo Picker redacts GPS, so try to recover it from the original bytes.
-        if ((latitude == null || longitude == null) && sourceUri != null) {
+        // 2. The Photo Picker redacts GPS, so (when opted in) recover it from the original bytes.
+        if (recoverOriginal && (latitude == null || longitude == null) && sourceUri != null) {
             recoverOriginalLatLong(context, sourceUri)?.let { latLong ->
                 latitude = latLong[0]
                 longitude = latLong[1]
