@@ -141,6 +141,46 @@ public function handleMediaSelected($success, $files, $count)
 }
 ```
 
+## Capture date and location
+
+Photos taken with the camera and images picked from the gallery carry additional, optional payload keys on `PhotoTaken` and on each file in `MediaSelected`:
+
+- `takenAt` - capture date as an ISO-8601 UTC string (e.g. `2026-05-25T18:46:04Z`)
+- `latitude`, `longitude` - GPS coordinates in decimal degrees
+
+Keys are omitted when the value is unavailable, so existing consumers are unaffected.
+
+`takenAt` is always read from the image's EXIF data and needs no extra permissions. GPS coordinates are only present if they are already embedded in the file. By default the plugin does **not** ask for any new permissions.
+
+### Opting into location
+
+Pass `includeLocation: true` to actively recover the location. This prompts the user for additional permissions the first time:
+
+- **iOS:** When-In-Use location access (camera) and Photo Library access (gallery), so the picker exposes the asset's original location.
+- **Android:** the `ACCESS_MEDIA_LOCATION` runtime permission (gallery), so GPS redacted by the Photo Picker can be recovered.
+
+```php
+use Native\Mobile\Facades\Camera;
+use Native\Mobile\PendingMediaPicker;
+
+// Geotag a camera capture
+Camera::getPhoto(['includeLocation' => true]);
+
+// Recover the location of picked images
+(new PendingMediaPicker(['includeLocation' => true]))
+    ->images()
+    ->multiple()
+    ->start();
+```
+
+```php
+#[OnNative(PhotoTaken::class)]
+public function handlePhotoTaken(string $path, string $mimeType, ?string $id = null, ?string $takenAt = null, ?float $latitude = null, ?float $longitude = null)
+{
+    // ...
+}
+```
+
 ## PendingVideoRecorder API
 
 ### `maxDuration(int $seconds)`

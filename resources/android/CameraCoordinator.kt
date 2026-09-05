@@ -2,9 +2,11 @@ package com.nativephp.camera
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
@@ -13,12 +15,17 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
 import com.nativephp.mobile.utils.NativeActionCoordinator
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -66,6 +73,14 @@ class CameraCoordinator : Fragment() {
     // Gallery state
     private var pendingGalleryId: String? = null
     private var pendingGalleryEvent: String? = null
+    // Retained gallery launch arguments so the picker can be re-launched after
+    // resolving the ACCESS_MEDIA_LOCATION runtime permission.
+    private var pendingGalleryMediaType: String? = null
+    private var pendingGalleryMultiple: Boolean = false
+    private var pendingGalleryMaxItems: Int = 10
+    // Opt-in: recover un-redacted GPS for picked media (requires ACCESS_MEDIA_LOCATION).
+    // Defaults to false so existing users never see a new permission prompt.
+    private var pendingGalleryIncludeLocation: Boolean = false
 
     // Background processing
     private var fileProcessingExecutor: ExecutorService? = null
@@ -74,6 +89,7 @@ class CameraCoordinator : Fragment() {
     private lateinit var cameraLauncher: ActivityResultLauncher<Uri>
     private lateinit var videoRecorderLauncher: ActivityResultLauncher<Intent>
     private lateinit var cameraPermissionLauncher: ActivityResultLauncher<String>
+    private lateinit var mediaLocationPermissionLauncher: ActivityResultLauncher<String>
     private lateinit var galleryPickerSingle: ActivityResultLauncher<PickVisualMediaRequest>
     private lateinit var galleryPickerMultiple: ActivityResultLauncher<PickVisualMediaRequest>
 
@@ -141,6 +157,16 @@ class CameraCoordinator : Fragment() {
             }
         }
 
+        // Media location permission launcher (ACCESS_MEDIA_LOCATION).
+        // Whatever the user decides, we proceed to launch the gallery picker; the
+        // permission only controls whether un-redacted GPS metadata can be recovered.
+        mediaLocationPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            Log.d(TAG, "🖼️ Media location permission result: $granted")
+            launchGalleryPicker()
+        }
+
         // Camera launcher for photos
         cameraLauncher = registerForActivityResult(
             ActivityResultContracts.TakePicture()
@@ -161,41 +187,58 @@ class CameraCoordinator : Fragment() {
             val cancelEventClass = "Native\\Mobile\\Events\\Camera\\PhotoCancelled"
 
             if (success && pendingCameraUri != null) {
-                // Use app's files directory (accessible to PHP) instead of cache
-                val photoDir = File(context.filesDir, "Camera")
-                photoDir.mkdirs()
-                val dst = File(photoDir, "captured_${System.currentTimeMillis()}.jpg")
+                // Snapshot pending state before handing off to the background thread so the
+                // launcher can clean up immediately without racing the worker.
+                val sourceUri = pendingCameraUri!!
+                val photoId = pendingPhotoId
 
-                try {
-                    context.contentResolver.openInputStream(pendingCameraUri!!)?.use { input ->
-                        dst.outputStream().buffered(64 * 1024).use { output ->
-                            input.copyTo(output)
+                // Copy + EXIF reading is file IO, so run it off the main thread.
+                fileProcessingExecutor?.execute {
+                    // Use app's files directory (accessible to PHP) instead of cache
+                    val photoDir = File(context.filesDir, "Camera")
+                    photoDir.mkdirs()
+                    val dst = File(photoDir, "captured_${System.currentTimeMillis()}.jpg")
+
+                    try {
+                        context.contentResolver.openInputStream(sourceUri)?.use { input ->
+                            dst.outputStream().buffered(64 * 1024).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        // Clean up MediaStore entry
+                        try {
+                            context.contentResolver.delete(sourceUri, null, null)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "⚠️ Could not delete MediaStore entry: ${e.message}")
+                        }
+
+                        val payload = JSONObject().apply {
+                            put("path", dst.absolutePath)
+                            put("mimeType", "image/jpeg")
+                            photoId?.let { put("id", it) }
+                        }
+
+                        // Attach capture date + GPS from the embedded EXIF. The date falls
+                        // back to the current time so takenAt is essentially always present.
+                        attachImageMetadata(payload, dst.absolutePath, fallbackToNow = true)
+
+                        activity?.runOnUiThread {
+                            dispatchEvent(eventClass, payload.toString())
+                            Log.d(TAG, "✅ Photo captured successfully: ${dst.absolutePath}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Error processing camera photo: ${e.message}", e)
+
+                        activity?.runOnUiThread {
+                            Toast.makeText(context, "Failed to save photo", Toast.LENGTH_SHORT).show()
+
+                            val payload = JSONObject().apply {
+                                put("cancelled", true)
+                                photoId?.let { put("id", it) }
+                            }
+                            dispatchEvent(cancelEventClass, payload.toString())
                         }
                     }
-                    // Clean up MediaStore entry
-                    try {
-                        context.contentResolver.delete(pendingCameraUri!!, null, null)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "⚠️ Could not delete MediaStore entry: ${e.message}")
-                    }
-
-                    val payload = JSONObject().apply {
-                        put("path", dst.absolutePath)
-                        put("mimeType", "image/jpeg")
-                        pendingPhotoId?.let { put("id", it) }
-                    }
-
-                    dispatchEvent(eventClass, payload.toString())
-                    Log.d(TAG, "✅ Photo captured successfully: ${dst.absolutePath}")
-                } catch (e: Exception) {
-                    Log.e(TAG, "❌ Error processing camera photo: ${e.message}", e)
-                    Toast.makeText(context, "Failed to save photo", Toast.LENGTH_SHORT).show()
-
-                    val payload = JSONObject().apply {
-                        put("cancelled", true)
-                        pendingPhotoId?.let { put("id", it) }
-                    }
-                    dispatchEvent(cancelEventClass, payload.toString())
                 }
             } else {
                 Log.d(TAG, "⚠️ Camera capture was canceled or failed")
@@ -614,13 +657,47 @@ class CameraCoordinator : Fragment() {
         videoRecorderLauncher.launch(intent)
     }
 
-    fun launchGallery(mediaType: String, multiple: Boolean, maxItems: Int, id: String? = null, event: String? = null) {
-        Log.d(TAG, "🖼️ launchGallery: mediaType=$mediaType, multiple=$multiple, maxItems=$maxItems, id=$id, event=$event")
+    fun launchGallery(
+        mediaType: String,
+        multiple: Boolean,
+        maxItems: Int,
+        id: String? = null,
+        event: String? = null,
+        includeLocation: Boolean = false
+    ) {
+        Log.d(TAG, "🖼️ launchGallery: mediaType=$mediaType, multiple=$multiple, maxItems=$maxItems, id=$id, event=$event, includeLocation=$includeLocation")
 
         pendingGalleryId = id
         pendingGalleryEvent = event
+        pendingGalleryMediaType = mediaType
+        pendingGalleryMultiple = multiple
+        pendingGalleryMaxItems = maxItems
+        pendingGalleryIncludeLocation = includeLocation
 
-        val visualMediaType = when (mediaType.lowercase()) {
+        // The Photo Picker redacts GPS metadata unless we read the original bytes via
+        // MediaStore, which requires ACCESS_MEDIA_LOCATION (a runtime permission on API 29+).
+        // Only when the caller opted in (includeLocation=true) do we request it up-front,
+        // mirroring the CAMERA permission flow. Whatever the result, we still launch the
+        // picker; location recovery just degrades gracefully.
+        if (includeLocation && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val context = requireContext()
+            val mediaLocationGranted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_MEDIA_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!mediaLocationGranted) {
+                Log.d(TAG, "🖼️ ACCESS_MEDIA_LOCATION not granted, requesting permission")
+                mediaLocationPermissionLauncher.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                return
+            }
+        }
+
+        launchGalleryPicker()
+    }
+
+    private fun launchGalleryPicker() {
+        val visualMediaType = when ((pendingGalleryMediaType ?: "all").lowercase()) {
             "image", "images" -> ActivityResultContracts.PickVisualMedia.ImageOnly
             "video", "videos" -> ActivityResultContracts.PickVisualMedia.VideoOnly
             "all", "*" -> ActivityResultContracts.PickVisualMedia.ImageAndVideo
@@ -629,7 +706,7 @@ class CameraCoordinator : Fragment() {
 
         Log.d(TAG, "📂 Using visual media type: $visualMediaType")
 
-        if (multiple) {
+        if (pendingGalleryMultiple) {
             Log.d(TAG, "🚀 Launching multiple gallery picker")
             val request = PickVisualMediaRequest.Builder()
                 .setMediaType(visualMediaType)
@@ -727,6 +804,19 @@ class CameraCoordinator : Fragment() {
                 put("type", type)
             }
 
+            // For images, attach capture date + GPS from the file's EXIF. The Photo Picker
+            // redacts GPS, so when the caller opted in we also attempt to recover the original
+            // (un-redacted) bytes via MediaStore.
+            if (type == "image") {
+                attachImageMetadata(
+                    metadata,
+                    cachePath,
+                    fallbackToNow = false,
+                    sourceUri = uri,
+                    recoverOriginal = pendingGalleryIncludeLocation
+                )
+            }
+
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error getting file metadata", e)
             // Fallback metadata
@@ -739,6 +829,198 @@ class CameraCoordinator : Fragment() {
         }
 
         return metadata
+    }
+
+    /**
+     * Read capture date + GPS metadata from an image and merge it into [payload] using the
+     * shared cross-platform payload contract:
+     *  - takenAt: ISO-8601 UTC string (yyyy-MM-dd'T'HH:mm:ss'Z'), omitted when unavailable.
+     *  - latitude / longitude: Double decimal degrees, omitted when unavailable.
+     *
+     * The capture date is read from the copied file's EXIF (TAG_DATETIME_ORIGINAL, falling back
+     * to TAG_DATETIME), then MediaStore DATE_TAKEN, then optionally the current time.
+     *
+     * GPS is read from the copied file's EXIF first. The Photo Picker redacts location, so when a
+     * [sourceUri] is supplied and [recoverOriginal] is true we additionally try to recover the
+     * original (un-redacted) bytes via MediaStore.setRequireOriginal (requires
+     * ACCESS_MEDIA_LOCATION on API 29+). This is opt-in (bridge parameter `includeLocation`).
+     *
+     * All access is best-effort: any failure simply omits the affected key and never throws.
+     */
+    private fun attachImageMetadata(
+        payload: JSONObject,
+        cachePath: String,
+        fallbackToNow: Boolean,
+        sourceUri: Uri? = null,
+        recoverOriginal: Boolean = false
+    ) {
+        val context = context ?: return
+
+        var takenAtMillis: Long? = null
+        var latitude: Double? = null
+        var longitude: Double? = null
+
+        // 1. Read EXIF from the copied cache file.
+        try {
+            val exif = ExifInterface(cachePath)
+
+            takenAtMillis = parseExifDate(
+                exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+            )
+
+            exif.latLong?.let { latLong ->
+                latitude = latLong[0]
+                longitude = latLong[1]
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Could not read EXIF from cache file: ${e.message}")
+        }
+
+        // 2. The Photo Picker redacts GPS, so (when opted in) recover it from the original bytes.
+        if (recoverOriginal && (latitude == null || longitude == null) && sourceUri != null) {
+            recoverOriginalLatLong(context, sourceUri)?.let { latLong ->
+                latitude = latLong[0]
+                longitude = latLong[1]
+            }
+
+            // While we have the original stream open, also try to recover the EXIF date if missing.
+            if (takenAtMillis == null) {
+                takenAtMillis = recoverOriginalExifDate(context, sourceUri)
+            }
+        }
+
+        // 3. Fall back to MediaStore DATE_TAKEN for the capture date.
+        if (takenAtMillis == null && sourceUri != null) {
+            takenAtMillis = queryMediaStoreDateTaken(context, sourceUri)
+        }
+
+        // 4. Final fallback to the current time (camera capture only).
+        if (takenAtMillis == null && fallbackToNow) {
+            takenAtMillis = System.currentTimeMillis()
+        }
+
+        takenAtMillis?.let { payload.put("takenAt", formatUtcIso8601(it)) }
+        latitude?.let { lat -> longitude?.let { lon ->
+            payload.put("latitude", lat)
+            payload.put("longitude", lon)
+        } }
+    }
+
+    /**
+     * Attempt to recover un-redacted GPS from the original MediaStore image, returning
+     * [latitude, longitude] in decimal degrees or null if unavailable.
+     */
+    private fun recoverOriginalLatLong(context: Context, uri: Uri): DoubleArray? {
+        return try {
+            openOriginalStreamExif(context, uri)?.latLong
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Could not recover original GPS: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Attempt to recover the EXIF capture date from the original MediaStore image, in millis.
+     */
+    private fun recoverOriginalExifDate(context: Context, uri: Uri): Long? {
+        return try {
+            val exif = openOriginalStreamExif(context, uri) ?: return null
+            parseExifDate(
+                exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                    ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Could not recover original EXIF date: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Open an [ExifInterface] over the original (un-redacted) bytes of a MediaStore-backed uri.
+     * Uses MediaStore.setRequireOriginal on API 29+, which needs ACCESS_MEDIA_LOCATION. Returns
+     * null when the permission is missing or the uri is not MediaStore-backed.
+     */
+    private fun openOriginalStreamExif(context: Context, uri: Uri): ExifInterface? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return null
+        }
+
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_MEDIA_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return null
+        }
+
+        val originalUri = try {
+            MediaStore.setRequireOriginal(uri)
+        } catch (e: Exception) {
+            // Not a MediaStore uri (e.g. provider-backed) or original unavailable.
+            return null
+        }
+
+        return context.contentResolver.openInputStream(originalUri)?.use { input ->
+            ExifInterface(input)
+        }
+    }
+
+    /**
+     * Query MediaStore DATE_TAKEN (epoch millis) for the given uri, or null if unavailable.
+     */
+    private fun queryMediaStoreDateTaken(context: Context, uri: Uri): Long? {
+        return try {
+            context.contentResolver.query(
+                uri,
+                arrayOf(MediaStore.Images.Media.DATE_TAKEN),
+                null,
+                null,
+                null
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                    if (index >= 0 && !cursor.isNull(index)) {
+                        val value = cursor.getLong(index)
+                        if (value > 0) value else null
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "⚠️ Could not query MediaStore DATE_TAKEN: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Parse an EXIF date string (yyyy:MM:dd HH:mm:ss, device-local) into epoch millis, or null.
+     */
+    private fun parseExifDate(raw: String?): Long? {
+        if (raw.isNullOrBlank()) {
+            return null
+        }
+        return try {
+            val parser = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).apply {
+                timeZone = TimeZone.getDefault()
+            }
+            parser.parse(raw)?.time
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Format epoch millis as an ISO-8601 UTC string: yyyy-MM-dd'T'HH:mm:ss'Z'.
+     */
+    private fun formatUtcIso8601(millis: Long): String {
+        val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        return formatter.format(Date(millis))
     }
 
     private fun dispatchEvent(event: String, payloadJson: String) {
