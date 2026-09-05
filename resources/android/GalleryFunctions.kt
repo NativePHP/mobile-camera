@@ -20,6 +20,8 @@ object GalleryFunctions {
      *   - maxItems: (optional) int - Maximum number of items when multiple=true (default: 10)
      *   - id: (optional) string - Optional ID to track this operation
      *   - event: (optional) string - Custom event class to fire (defaults to "NativePHP\Camera\Events\MediaSelected")
+     *   - includeLocation: (optional) boolean - Recover GPS coordinates of picked images. Requests the
+     *     ACCESS_MEDIA_LOCATION runtime permission on API 29+ (default: false, no new prompt)
      * Returns:
      *   - (empty map - results are returned via events)
      * Events:
@@ -32,14 +34,15 @@ object GalleryFunctions {
             val maxItems = (parameters["maxItems"] as? Number)?.toInt() ?: 10
             val id = parameters["id"] as? String
             val event = parameters["event"] as? String
+            val includeLocation = parameters["includeLocation"] as? Boolean ?: false
 
-            Log.d("GalleryFunctions.PickMedia", "🖼️ Picking media with mediaType=$mediaType, multiple=$multiple, maxItems=$maxItems, id=$id, event=$event")
+            Log.d("GalleryFunctions.PickMedia", "🖼️ Picking media with mediaType=$mediaType, multiple=$multiple, maxItems=$maxItems, id=$id, event=$event, includeLocation=$includeLocation")
 
             // Launch gallery on UI thread
             Handler(Looper.getMainLooper()).post {
                 try {
                     val coord = CameraCoordinator.install(activity)
-                    coord.launchGallery(mediaType, multiple, maxItems, id, event)
+                    coord.launchGallery(mediaType, multiple, maxItems, id, event, includeLocation)
                 } catch (e: Exception) {
                     Log.e("GalleryFunctions.PickMedia", "❌ Error launching gallery: ${e.message}", e)
                 }
