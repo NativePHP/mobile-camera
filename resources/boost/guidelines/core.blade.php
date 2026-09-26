@@ -128,7 +128,9 @@ Camera::getPhoto(['includeLocation' => true]);
 
 ### Storage Locations
 
-- **Photos (Android):** `{cache}/captured.jpg`
-- **Photos (iOS):** `~/Library/Application Support/Photos/captured.jpg`
-- **Videos (Android):** `{cache}/video_{timestamp}.mp4`
-- **Videos (iOS):** `~/Library/Application Support/Videos/captured_video_{timestamp}.mp4`
+- **Camera (Android):** `{noBackupFilesDir}/Camera/`
+- **Camera (iOS):** `~/Library/Application Support/Camera/`
+- **Gallery (Android):** `{noBackupFilesDir}/Gallery/`
+- **Gallery (iOS):** `~/Library/Application Support/Gallery/`
+
+These folders are readable by PHP, persistent and excluded from device backups. The plugin never deletes them, so copy files you want to keep into app storage in the event handler and `unlink()` the original.

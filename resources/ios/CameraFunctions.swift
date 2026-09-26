@@ -1038,6 +1038,11 @@ extension CameraGalleryManager: PHPickerViewControllerDelegate {
                 }
             }
 
+            // Exclude from iCloud / iTunes backup
+            var resourceValues = URLResourceValues()
+            resourceValues.isExcludedFromBackup = true
+            try finalURL.setResourceValues(resourceValues)
+
             var fileInfo: [String: Any] = [
                 "path": finalURL.path,
                 "mimeType": getMimeType(for: finalExtension),

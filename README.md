@@ -205,13 +205,27 @@ Explicitly start the video recording.
 
 ## Storage Locations
 
-**Photos:**
-- **Android:** App cache directory at `{cache}/captured.jpg`
-- **iOS:** Application Support at `~/Library/Application Support/Photos/captured.jpg`
+Captured and picked files are written to app-private storage that PHP can read, that the OS will not purge, and that is excluded from device backups (iCloud on iOS, Auto Backup on Android).
 
-**Videos:**
-- **Android:** App cache directory at `{cache}/video_{timestamp}.mp4`
-- **iOS:** Application Support at `~/Library/Application Support/Videos/captured_video_{timestamp}.mp4`
+**Photos and videos:**
+- **Android:** `{noBackupFilesDir}/Camera/`
+- **iOS:** `~/Library/Application Support/Camera/`
+
+**Gallery picks:**
+- **Android:** `{noBackupFilesDir}/Gallery/`
+- **iOS:** `~/Library/Application Support/Gallery/`
+
+The plugin never deletes these files. Copy what you want to keep into your own storage when the event fires, then delete the original:
+
+```php
+#[OnNative(PhotoTaken::class)]
+public function handlePhotoTaken(string $path)
+{
+    Storage::put('photos/'.basename($path), file_get_contents($path));
+
+    unlink($path);
+}
+```
 
 ## Testing
 
