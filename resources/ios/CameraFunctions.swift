@@ -611,7 +611,8 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
 
         // Grab the best location fix we have at capture time (may be nil). Only consulted when
         // the caller opted in; otherwise the provider was never started and no prompt was shown.
-        let captureLocation = pendingIncludeLocation ? CameraLocationProvider.shared.currentLocation : nil
+        let includeLocation = pendingIncludeLocation
+        let captureLocation = includeLocation ? CameraLocationProvider.shared.currentLocation : nil
         CameraLocationProvider.shared.stop()
         pendingIncludeLocation = false
 
@@ -641,8 +642,14 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
                 }
 
                 // Build the metadata dictionary to embed, starting from the original capture
-                // metadata so Exif (incl. DateTimeOriginal) and any existing GPS are preserved.
+                // metadata so Exif (incl. DateTimeOriginal) is preserved.
                 var imageProperties = mediaMetadata
+
+                // The capture metadata can already contain GPS when the app holds location
+                // authorization for some other reason. Only keep it if the caller opted in.
+                if !includeLocation {
+                    imageProperties.removeValue(forKey: kCGImagePropertyGPSDictionary as String)
+                }
 
                 // If the capture metadata lacks GPS (e.g. no location authorization at capture
                 // time), synthesise one from our CLLocation fix so the file stays geotagged.
@@ -673,6 +680,7 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
                         fileURL: fileURL,
                         eventClass: eventClass,
                         mediaMetadata: mediaMetadata,
+                        includeLocation: includeLocation,
                         captureLocation: captureLocation
                     )
                     return
@@ -697,6 +705,7 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
                     fileURL: fileURL,
                     eventClass: eventClass,
                     mediaMetadata: mediaMetadata,
+                    includeLocation: includeLocation,
                     captureLocation: captureLocation
                 )
 
@@ -724,6 +733,7 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
         fileURL: URL,
         eventClass: String,
         mediaMetadata: [String: Any],
+        includeLocation: Bool,
         captureLocation: CLLocation?
     ) {
         var payload: [String: Any] = [
@@ -739,13 +749,16 @@ final class CameraPhotoDelegate: NSObject, UIImagePickerControllerDelegate, UINa
         let takenAtDate = CameraMetadata.dateTimeOriginal(from: mediaMetadata) ?? Date()
         payload["takenAt"] = CameraMetadata.isoString(from: takenAtDate)
 
-        // latitude/longitude: prefer GPS embedded in the capture metadata, then our CLLocation.
-        if let coordinate = CameraMetadata.coordinate(from: mediaMetadata) {
-            payload["latitude"] = coordinate.latitude
-            payload["longitude"] = coordinate.longitude
-        } else if let location = captureLocation {
-            payload["latitude"] = location.coordinate.latitude
-            payload["longitude"] = location.coordinate.longitude
+        // latitude/longitude: only when the caller opted in. Prefer GPS embedded in the capture
+        // metadata, then our CLLocation.
+        if includeLocation {
+            if let coordinate = CameraMetadata.coordinate(from: mediaMetadata) {
+                payload["latitude"] = coordinate.latitude
+                payload["longitude"] = coordinate.longitude
+            } else if let location = captureLocation {
+                payload["latitude"] = location.coordinate.latitude
+                payload["longitude"] = location.coordinate.longitude
+            }
         }
 
         // Dispatch event with slight delay to ensure UI is ready
