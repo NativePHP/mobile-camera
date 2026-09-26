@@ -194,8 +194,9 @@ class CameraCoordinator : Fragment() {
 
                 // Copy + EXIF reading is file IO, so run it off the main thread.
                 fileProcessingExecutor?.execute {
-                    // Use app's files directory (accessible to PHP) instead of cache
-                    val photoDir = File(context.filesDir, "Camera")
+                    // Use app-private no_backup directory: readable by PHP, persistent, and
+                    // excluded from Auto Backup so captures never end up in Google Drive
+                    val photoDir = File(context.noBackupFilesDir, "Camera")
                     photoDir.mkdirs()
                     val dst = File(photoDir, "captured_${System.currentTimeMillis()}.jpg")
 
@@ -355,8 +356,9 @@ class CameraCoordinator : Fragment() {
                         val context = requireContext()
                         val timestamp = System.currentTimeMillis()
 
-                        // Use Gallery subfolder in app's files directory (accessible to PHP)
-                        val galleryDir = File(context.filesDir, "Gallery")
+                        // Use Gallery subfolder in the no_backup directory: readable by PHP,
+                        // persistent, and excluded from Auto Backup
+                        val galleryDir = File(context.noBackupFilesDir, "Gallery")
                         galleryDir.mkdirs()
 
                         val dst = File(galleryDir, "gallery_selected_$timestamp")
@@ -453,8 +455,9 @@ class CameraCoordinator : Fragment() {
 
                         Log.d(TAG, "🧵 Background processing ${uris.size} files")
 
-                        // Use Gallery subfolder in app's files directory (accessible to PHP)
-                        val galleryDir = File(context.filesDir, "Gallery")
+                        // Use Gallery subfolder in the no_backup directory: readable by PHP,
+                        // persistent, and excluded from Auto Backup
+                        val galleryDir = File(context.noBackupFilesDir, "Gallery")
                         galleryDir.mkdirs()
 
                         uris.forEachIndexed { index, uri ->
@@ -737,8 +740,9 @@ class CameraCoordinator : Fragment() {
 
         try {
             val timestamp = System.currentTimeMillis()
-            // Use app's files directory (accessible to PHP) instead of cache
-            val videoDir = File(context.filesDir, "Camera")
+            // Use app-private no_backup directory: readable by PHP, persistent, and
+            // excluded from Auto Backup so captures never end up in Google Drive
+            val videoDir = File(context.noBackupFilesDir, "Camera")
             videoDir.mkdirs()
             val cacheFile = File(videoDir, "video_$timestamp.mp4")
 
