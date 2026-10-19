@@ -7,6 +7,19 @@ import Photos
 import CoreLocation
 import ImageIO
 
+/// The view controller to present a picker from: the topmost one, since the root
+/// view controller can't present while it's already presenting something, such
+/// as a sheet the app is showing. Presenting from it there does nothing at all.
+private func topViewController(from root: UIViewController) -> UIViewController {
+    var top = root
+
+    while let presented = top.presentedViewController, !presented.isBeingDismissed {
+        top = presented
+    }
+
+    return top
+}
+
 // MARK: - Camera Function Namespace
 
 /// Functions related to camera operations
@@ -115,7 +128,7 @@ enum CameraFunctions {
                 picker.cameraCaptureMode = .photo
 
                 picker.delegate = CameraPhotoDelegate.shared
-                rootVC.present(picker, animated: true)
+                topViewController(from: rootVC).present(picker, animated: true)
             }
         }
     }
@@ -273,7 +286,7 @@ enum CameraFunctions {
                 }
 
                 picker.delegate = CameraVideoDelegate.shared
-                rootVC.present(picker, animated: true)
+                topViewController(from: rootVC).present(picker, animated: true)
             }
         }
     }
@@ -852,7 +865,7 @@ final class CameraGalleryManager: NSObject {
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = self
 
-        rootVC.present(picker, animated: true)
+        topViewController(from: rootVC).present(picker, animated: true)
     }
 }
 
