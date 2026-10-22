@@ -150,7 +150,7 @@ Photos taken with the camera and images picked from the gallery carry additional
 
 Keys are omitted when the value is unavailable, so existing consumers are unaffected.
 
-`takenAt` is always read from the image's EXIF data and needs no extra permissions. GPS coordinates are only present if they are already embedded in the file. By default the plugin does **not** ask for any new permissions.
+`takenAt` is always read from the image's EXIF data and needs no extra permissions. For gallery images, GPS coordinates are only present if they are already embedded in the file. On iOS, photos taken with the camera never carry location, in the file or the payload, unless you opt in below. By default the plugin does **not** ask for any new permissions.
 
 ### Opting into location
 
