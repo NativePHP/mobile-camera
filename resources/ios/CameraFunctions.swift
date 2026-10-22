@@ -7,19 +7,6 @@ import Photos
 import CoreLocation
 import ImageIO
 
-/// The view controller to present a picker from: the topmost one, since the root
-/// view controller can't present while it's already presenting something, such
-/// as a sheet the app is showing. Presenting from it there does nothing at all.
-private func topViewController(from root: UIViewController) -> UIViewController {
-    var top = root
-
-    while let presented = top.presentedViewController, !presented.isBeingDismissed {
-        top = presented
-    }
-
-    return top
-}
-
 // MARK: - Camera Function Namespace
 
 /// Functions related to camera operations
@@ -107,16 +94,6 @@ enum CameraFunctions {
                     CameraLocationProvider.shared.start()
                 }
 
-                guard let windowScene = UIApplication.shared.connectedScenes
-                    .compactMap({ $0 as? UIWindowScene })
-                    .first(where: { $0.activationState == .foregroundActive }),
-                      let rootVC = windowScene.windows
-                        .first(where: { $0.isKeyWindow })?
-                        .rootViewController else {
-                    print("❌ Failed to get root view controller")
-                    return
-                }
-
                 guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
                     print("❌ Camera not available")
                     return
@@ -128,7 +105,10 @@ enum CameraFunctions {
                 picker.cameraCaptureMode = .photo
 
                 picker.delegate = CameraPhotoDelegate.shared
-                topViewController(from: rootVC).present(picker, animated: true)
+
+                if !CameraPresenter.present(picker) {
+                    print("❌ Failed to find a view controller to present from")
+                }
             }
         }
     }
@@ -256,17 +236,6 @@ enum CameraFunctions {
                     LaravelBridge.shared.send?(cancelEventClass, payload)
                 }
 
-                guard let windowScene = UIApplication.shared.connectedScenes
-                    .compactMap({ $0 as? UIWindowScene })
-                    .first(where: { $0.activationState == .foregroundActive }),
-                      let rootVC = windowScene.windows
-                        .first(where: { $0.isKeyWindow })?
-                        .rootViewController else {
-                    print("❌ Failed to get root view controller")
-                    fireCancel()
-                    return
-                }
-
                 // Check if camera is available and supports video recording
                 guard UIImagePickerController.isSourceTypeAvailable(.camera),
                       UIImagePickerController.availableMediaTypes(for: .camera)?.contains(UTType.movie.identifier) == true else {
@@ -286,9 +255,56 @@ enum CameraFunctions {
                 }
 
                 picker.delegate = CameraVideoDelegate.shared
-                topViewController(from: rootVC).present(picker, animated: true)
+
+                if !CameraPresenter.present(picker) {
+                    print("❌ Failed to find a view controller to present from")
+                    fireCancel()
+                }
             }
         }
+    }
+}
+
+// MARK: - Presentation
+
+/// Presents pickers from the topmost view controller.
+///
+/// UIKit silently ignores `present(_:animated:)` on a controller that is already presenting
+/// something, so presenting on the window's `rootViewController` does nothing while a modal
+/// (e.g. a `<native:bottom-sheet>`, which is a SwiftUI `.sheet`) is on screen. Walking up the
+/// presentation chain to the topmost controller fixes this, including for nested sheets.
+enum CameraPresenter {
+    /// Present `viewController` on top of whatever is currently on screen.
+    /// If the topmost modal is mid-dismissal (e.g. a sheet closed in the same tap), waits for
+    /// that transition to finish first, since UIKit also drops presentations made during one.
+    /// Returns false when there is no window to present from.
+    @discardableResult
+    static func present(_ viewController: UIViewController, animated: Bool = true) -> Bool {
+        guard var top = rootViewController() else {
+            return false
+        }
+
+        while let presented = top.presentedViewController {
+            if presented.isBeingDismissed, let coordinator = presented.transitionCoordinator {
+                coordinator.animate(alongsideTransition: nil) { _ in
+                    CameraPresenter.present(viewController, animated: animated)
+                }
+                return true
+            }
+
+            top = presented
+        }
+
+        top.present(viewController, animated: animated)
+        return true
+    }
+
+    private static func rootViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        let window = scene?.windows.first(where: { $0.isKeyWindow }) ?? scene?.windows.first
+
+        return window?.rootViewController
     }
 }
 
@@ -839,15 +855,6 @@ final class CameraGalleryManager: NSObject {
     }
 
     private func presentPicker(mediaType: String, multiple: Bool, maxItems: Int, useLibrary: Bool) {
-        guard let windowScene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }),
-              let rootVC = windowScene.windows
-            .first(where: { $0.isKeyWindow })?
-            .rootViewController else {
-            return
-        }
-
         // Only when opted in: back the picker with the shared photo library so results expose
         // `assetIdentifier`. The plain configuration needs no Photo Library permission.
         var configuration = useLibrary
@@ -878,7 +885,7 @@ final class CameraGalleryManager: NSObject {
         let picker = PHPickerViewController(configuration: configuration)
         picker.delegate = self
 
-        topViewController(from: rootVC).present(picker, animated: true)
+        CameraPresenter.present(picker)
     }
 }
 
