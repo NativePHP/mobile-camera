@@ -339,8 +339,11 @@ class CameraCoordinator : Fragment() {
             Log.d(TAG, "📸 Single gallery picker callback triggered")
             Log.d(TAG, "🔍 Received URI: $uri")
 
-            // Use default event if not provided
+            // Snapshot pending state before handing off to the background thread so
+            // cleanup below cannot race the worker.
             val eventClass = pendingGalleryEvent ?: "Native\\Mobile\\Events\\Gallery\\MediaSelected"
+            val galleryId = pendingGalleryId
+            val includeLocation = pendingGalleryIncludeLocation
 
             if (uri != null) {
                 Log.d(TAG, "✅ Single gallery picker - URI received successfully")
@@ -375,7 +378,7 @@ class CameraCoordinator : Fragment() {
                         Log.d(TAG, "✅ File copied successfully")
 
                         // Get file metadata
-                        val fileMetadata = getFileMetadata(uri, dst.absolutePath)
+                        val fileMetadata = getFileMetadata(uri, dst.absolutePath, includeLocation)
                         val filesArray = JSONArray()
                         filesArray.put(fileMetadata)
 
@@ -383,7 +386,7 @@ class CameraCoordinator : Fragment() {
                             put("success", true)
                             put("files", filesArray)
                             put("count", 1)
-                            pendingGalleryId?.let { put("id", it) }
+                            galleryId?.let { put("id", it) }
                         }
 
                         // Dispatch on main thread
@@ -401,8 +404,9 @@ class CameraCoordinator : Fragment() {
                                 put("files", JSONArray())
                                 put("count", 0)
                                 put("error", "Failed to process file: ${e.message}")
+                                galleryId?.let { put("id", it) }
                             }
-                            dispatchEvent("Native\\Mobile\\Events\\Gallery\\MediaSelected", payload.toString())
+                            dispatchEvent(eventClass, payload.toString())
                         }
                     }
                 }
@@ -415,7 +419,7 @@ class CameraCoordinator : Fragment() {
                     put("files", JSONArray())
                     put("count", 0)
                     put("cancelled", true)
-                    pendingGalleryId?.let { put("id", it) }
+                    galleryId?.let { put("id", it) }
                 }
 
                 Log.d(TAG, "📤 Dispatching $eventClass event (cancelled) with payload: ${payload.toString()}")
@@ -440,8 +444,11 @@ class CameraCoordinator : Fragment() {
 
             Log.d(TAG, "📸 Multiple gallery picker callback triggered with ${uris.size} items")
 
-            // Use default event if not provided
+            // Snapshot pending state before handing off to the background thread so
+            // cleanup below cannot race the worker.
             val eventClass = pendingGalleryEvent ?: "Native\\Mobile\\Events\\Gallery\\MediaSelected"
+            val galleryId = pendingGalleryId
+            val includeLocation = pendingGalleryIncludeLocation
 
             if (uris.isNotEmpty()) {
                 Log.d(TAG, "📁 Processing ${uris.size} files - moving to background thread")
@@ -476,7 +483,7 @@ class CameraCoordinator : Fragment() {
                             }
 
                             // Get file metadata and add to array
-                            val fileMetadata = getFileMetadata(uri, dst.absolutePath)
+                            val fileMetadata = getFileMetadata(uri, dst.absolutePath, includeLocation)
                             filesArray.put(fileMetadata)
                         }
 
@@ -486,7 +493,7 @@ class CameraCoordinator : Fragment() {
                             put("success", true)
                             put("files", filesArray)
                             put("count", uris.size)
-                            pendingGalleryId?.let { put("id", it) }
+                            galleryId?.let { put("id", it) }
                         }
 
                         // Dispatch on main thread
@@ -504,7 +511,7 @@ class CameraCoordinator : Fragment() {
                                 put("files", JSONArray())
                                 put("count", 0)
                                 put("error", "Failed to process files: ${e.message}")
-                                pendingGalleryId?.let { put("id", it) }
+                                galleryId?.let { put("id", it) }
                             }
                             dispatchEvent(eventClass, payload.toString())
                         }
@@ -517,7 +524,7 @@ class CameraCoordinator : Fragment() {
                     put("files", JSONArray())
                     put("count", 0)
                     put("cancelled", true)
-                    pendingGalleryId?.let { put("id", it) }
+                    galleryId?.let { put("id", it) }
                 }
                 dispatchEvent(eventClass, payload.toString())
             }
@@ -767,7 +774,11 @@ class CameraCoordinator : Fragment() {
         return null
     }
 
-    private fun getFileMetadata(uri: Uri, cachePath: String): JSONObject {
+    private fun getFileMetadata(
+        uri: Uri,
+        cachePath: String,
+        includeLocation: Boolean = pendingGalleryIncludeLocation
+    ): JSONObject {
         val context = requireContext()
         val metadata = JSONObject()
 
@@ -817,7 +828,7 @@ class CameraCoordinator : Fragment() {
                     cachePath,
                     fallbackToNow = false,
                     sourceUri = uri,
-                    recoverOriginal = pendingGalleryIncludeLocation
+                    recoverOriginal = includeLocation
                 )
             }
 
